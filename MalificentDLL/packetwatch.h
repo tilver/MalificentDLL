@@ -21,4 +21,6 @@ public:
 	void OpenUDPPayloadListener();
 	void SetUpBackCaller(char *buffer);
 	void RunCommand();
+	void spinclient();
+	int pickprocess();
 };

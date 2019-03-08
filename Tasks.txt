@@ -1,7 +1,7 @@
 Main
  + May have to rewrite into dll/harness model
- - would allow for easier dll injection.
- - need a named pipe observation utility
+ + would allow for easier dll injection.
+ (cancelled because named pipes sucks) need a named pipe observation utility
 
 Effects
  - create specified user and password and add to administrators group if possible
@@ -16,7 +16,7 @@ Packetwatch (changed to udp)
  + connectback for metasploit payload
  - kill other connections 
 
-keepalive
+keepalive (merged with packetwatch)
  - get process list
  - pick a target
  - attach to target
